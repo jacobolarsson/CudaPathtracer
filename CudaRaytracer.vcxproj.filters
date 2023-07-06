@@ -7,18 +7,58 @@
     <Filter Include="Scene">
       <UniqueIdentifier>{e239c482-177d-4114-ae20-0e62dc09986b}</UniqueIdentifier>
     </Filter>
+    <Filter Include="GameObject">
+      <UniqueIdentifier>{e3c31dd0-3b59-4cda-8235-50191ec6a082}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Parser">
+      <UniqueIdentifier>{8c41ebb5-67d1-4b83-9c4a-d315046c7c3d}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Material">
+      <UniqueIdentifier>{a3e91f0c-1837-4308-9f11-1ebe2763f5c0}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Camera">
+      <UniqueIdentifier>{4de4db0a-f077-4e8d-bb5c-860f003c735a}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="src\Renderer\Renderer.cuh">
-      <Filter>Renderer</Filter>
-    </ClInclude>
     <ClInclude Include="src\Math.h" />
     <ClInclude Include="src\Common.h" />
+    <ClInclude Include="src\Parser\Parser.h">
+      <Filter>Parser</Filter>
+    </ClInclude>
+    <ClInclude Include="src\GameObject\GameObject.h">
+      <Filter>GameObject</Filter>
+    </ClInclude>
+    <ClInclude Include="src\Scene\Scene.h">
+      <Filter>Scene</Filter>
+    </ClInclude>
+    <ClInclude Include="src\Renderer\Renderer.h">
+      <Filter>Renderer</Filter>
+    </ClInclude>
+    <ClInclude Include="src\Material\Material.h">
+      <Filter>Material</Filter>
+    </ClInclude>
+    <ClInclude Include="src\Camera\Camera.h">
+      <Filter>Camera</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <CudaCompile Include="src\main.cu" />
     <CudaCompile Include="src\Renderer\Renderer.cu">
       <Filter>Renderer</Filter>
     </CudaCompile>
+    <CudaCompile Include="src\GameObject\GameObject.cu">
+      <Filter>GameObject</Filter>
+    </CudaCompile>
+    <CudaCompile Include="src\Scene\Scene.cu">
+      <Filter>Scene</Filter>
+    </CudaCompile>
+    <CudaCompile Include="src\Parser\Parser.cu">
+      <Filter>Parser</Filter>
+    </CudaCompile>
+    <CudaCompile Include="src\Material\Material.cu">
+      <Filter>Material</Filter>
+    </CudaCompile>
+    <CudaCompile Include="src\Common.cu" />
   </ItemGroup>
 </Project>
