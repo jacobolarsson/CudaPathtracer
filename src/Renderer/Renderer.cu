@@ -20,6 +20,7 @@ Renderer::Renderer(unsigned windowWidth,
 	, m_window(nullptr)
 	, m_renderer(nullptr)
 	, m_texture(nullptr)
+	, m_frameBufferVec(nullptr)
 	, m_frameBuffer(nullptr)
 	, m_dScene(dScene)
 	, m_dRandStates(nullptr)
@@ -41,23 +42,29 @@ Renderer::Renderer(unsigned windowWidth,
 	}
 	// Allocate memory for the frame buffer
 	size_t pixelCount = static_cast<size_t>(m_textureWidth) * static_cast<size_t>(m_textureHeight);
+	m_frameBuffer = new Pixel[pixelCount];
 
-	checkCudaErrors(cudaHostAlloc(&m_frameBuffer, pixelCount * sizeof(Pixel), cudaHostAllocMapped));
+	checkCudaErrors(cudaHostAlloc(&m_frameBufferVec, pixelCount * sizeof(vec3), cudaHostAllocMapped));
 	checkCudaErrors(cudaMalloc(&m_dRandStates, pixelCount * sizeof(curandState)));
 
+	for (int i = 0; i < pixelCount; i++) {
+		m_frameBufferVec[i] = { 0.0f, 0.0f, 0.0f };
+	}
+
 	ReadRenderConfig();
+	Init();
 }
 
 Renderer::~Renderer()
 {
-	checkCudaErrors(cudaFreeHost(m_frameBuffer));
+	checkCudaErrors(cudaFreeHost(m_frameBufferVec));
 	SDL_DestroyWindow(m_window);
 	SDL_DestroyRenderer(m_renderer);
 	SDL_DestroyTexture(m_texture);
 	SDL_Quit();
 }
 
-void Renderer::ComputeSceneTexture() const
+void Renderer::Init()
 {
 	dim3 blocks(m_textureWidth / m_threadXCount, m_textureHeight / m_threadYCount);
 	dim3 threads(m_threadXCount, m_threadYCount);
@@ -65,32 +72,45 @@ void Renderer::ComputeSceneTexture() const
 	DeviceFunc::InitRandStates<<<blocks, threads>>>(m_textureWidth, m_textureHeight, m_dRandStates);
 	checkCudaErrors(cudaGetLastError());
 	checkCudaErrors(cudaDeviceSynchronize());
+}
+
+void Renderer::ComputeSceneTexture() const
+{
+	dim3 blocks(m_textureWidth / m_threadXCount, m_textureHeight / m_threadYCount);
+	dim3 threads(m_threadXCount, m_threadYCount);
 
 	vec3 targetVec = normalize(m_camera->target - m_camera->pos);
 	vec3 horizontal = normalize(cross(targetVec, m_camera->up));
 	vec3 vertical = normalize(cross(horizontal, targetVec));
 	vec3 lowerLeftCorner = m_camera->pos - horizontal / 2.0f - vertical / 2.0f + targetVec * m_camera->focal;
 
-	Pixel* deviceFb;
-	checkCudaErrors(cudaHostGetDevicePointer(&deviceFb, m_frameBuffer, 0));
-	DeviceFunc::render<<<blocks, threads>>>(deviceFb,
-											m_dScene,
-											m_textureWidth,
-											m_windowHeight,
-											lowerLeftCorner,
-											horizontal,
-											vertical,
-											m_camera->pos,
-											m_dRandStates,
-											m_config.samples,
-											m_config.bounces);
-	checkCudaErrors(cudaGetLastError());
-	checkCudaErrors(cudaDeviceSynchronize());
+	vec3* deviceFb;
+	checkCudaErrors(cudaHostGetDevicePointer(&deviceFb, m_frameBufferVec, 0));
 
-	// Compute scene texture and set it as the renderer target
+	DeviceFunc::render<<<blocks, threads>>>(deviceFb,
+										    m_dScene,
+										    m_textureWidth,
+										    m_windowHeight,
+										    lowerLeftCorner,
+										    horizontal,
+										    vertical,
+										    m_camera->pos,
+										    m_dRandStates,
+										    m_config.bounces);
+}
+
+void Renderer::PresentCurrentSceneTexture(int currentSamples)
+{
+	size_t pixelCount = static_cast<size_t>(m_textureWidth) * static_cast<size_t>(m_textureHeight);
+	for (int i = 0; i < pixelCount; i++) {
+		m_frameBuffer[i] = Pixel(m_frameBufferVec[i], currentSamples);
+	}
+
 	SDL_UpdateTexture(m_texture, nullptr, m_frameBuffer, sizeof(Pixel) * m_textureWidth);
 	SDL_RenderClear(m_renderer);
 	SDL_RenderCopy(m_renderer, m_texture, nullptr, nullptr);
+	// Render
+	SDL_RenderPresent(m_renderer);
 }
 
 void Renderer::PresentSceneTexture()
@@ -138,7 +158,7 @@ void Renderer::ReadRenderConfig()
 	}
 }
 
-__global__ void DeviceFunc::render(Pixel* fb,
+__global__ void DeviceFunc::render(vec3* fb,
 								  Scene* dScene,
 								  int textureWidth,
 								  int textureHeight,
@@ -147,24 +167,25 @@ __global__ void DeviceFunc::render(Pixel* fb,
 								  vec3 vertical,
 								  vec3 origin,
 								  curandState* dRandStates,
-								  int samples,
 								  int bounces)
 {
 	int xIdx = threadIdx.x + blockIdx.x * blockDim.x;
 	int yIdx = threadIdx.y + blockIdx.y * blockDim.y;
-	if ((xIdx >= textureWidth) || (yIdx >= textureHeight)) return;
+	if ((xIdx >= textureWidth) || (yIdx >= textureHeight)) {
+		return;
+	}
 	int pixelIdx = (textureHeight - yIdx - 1) * textureWidth + xIdx;
 
-	vec3 color(0.0f, 0.0f, 0.0f);
-
-	for (int i = 0; i < samples; i++) {
+	vec3 color = { 0.0f, 0.0f, 0.0f };
+	for (int i = 0; i < 10; i++)
+	{
 		float u = (static_cast<float>(xIdx) + curand_uniform(&dRandStates[pixelIdx])) / textureWidth;
 		float v = (static_cast<float>(yIdx) + curand_uniform(&dRandStates[pixelIdx])) / textureHeight;
 		Ray r(origin, glm::normalize(lowerLeftCorner + u * horizontal + v * vertical - origin));
 		color += dScene->QueryRay(r, bounces, &dRandStates[pixelIdx]);
-	}
 
-	fb[pixelIdx] = Pixel(color, samples);
+	}
+	fb[pixelIdx] += color;
 }
 
 __global__ void DeviceFunc::InitRandStates(int textureWidth, int textureHeight, curandState* dRandStates)

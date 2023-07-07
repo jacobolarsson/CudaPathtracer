@@ -55,9 +55,13 @@ namespace Raytracer
 
 		~Renderer();
 
-		void ComputeSceneTexture() const;
+		void Init();
+		void ComputeSceneTexture()const;
+		void PresentCurrentSceneTexture(int currentSamples);
 		void PresentSceneTexture();
 		void ExportTexture() const;
+
+		RenderConfig const& GetConfig() const { return m_config; }
 
 	private:
 		void ReadRenderConfig();
@@ -69,6 +73,7 @@ namespace Raytracer
 		SDL_Window* m_window;
 		SDL_Renderer* m_renderer;
 		SDL_Texture* m_texture;
+		vec3* m_frameBufferVec;
 		Pixel* m_frameBuffer;
 		Scene* m_dScene;
 		curandState* m_dRandStates;
@@ -79,7 +84,7 @@ namespace Raytracer
 	};
 	namespace DeviceFunc
 	{
-		__global__ void render(Pixel* fb,
+		__global__ void render(vec3* fb,
 			Scene* dScene,
 			int max_x,
 			int max_y,
@@ -88,7 +93,6 @@ namespace Raytracer
 			vec3 vertical,
 			vec3 origin,
 			curandState* dRandStates,
-			int samples,
 			int bounces);
 
 		__global__ void InitRandStates(int textureWidth, int textureHeight, curandState* dRandStates);

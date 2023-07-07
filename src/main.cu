@@ -26,7 +26,6 @@ int main(int argc, char* argv[])
 	checkCudaErrors(cudaMalloc(&dScene, sizeof(Scene)));
 	
 	Parser parser("A3_Suzanne.txt", dScene);
-
 	GameObject** dObjects;
 	int size = parser.GetObjectCount();
 
@@ -40,21 +39,34 @@ int main(int argc, char* argv[])
 
 	clock_t start, stop;
 	start = clock();
-	renderer.ComputeSceneTexture();
-	stop = clock();
-	double timer_seconds = ((double)(stop - start)) / CLOCKS_PER_SEC;
-	std::cout << "took " << timer_seconds << " seconds.\n";
-
-	renderer.ExportTexture();
-
 	SDL_Event e;
 	bool quit = false;
+	for (int i = 0; i < renderer.GetConfig().samples; i += 10) {
+		renderer.ComputeSceneTexture();
+
+		checkCudaErrors(cudaDeviceSynchronize());
+		renderer.PresentCurrentSceneTexture(i);
+
+		stop = clock();
+		double timer_seconds = ((double)(stop - start)) / CLOCKS_PER_SEC;
+		std::cout << timer_seconds << " seconds.\n";
+	}
+
+	checkCudaErrors(cudaGetLastError());
+	checkCudaErrors(cudaDeviceSynchronize());
+
+	renderer.PresentCurrentSceneTexture(renderer.GetConfig().samples - 1);
+	stop = clock();
+	double timer_seconds = ((double)(stop - start)) / CLOCKS_PER_SEC;
+	std::cout << timer_seconds << " seconds.\n";
+	std::cout << "FINISHED\n";
 
 	while (!quit) {
 		SDL_WaitEvent(&e);
 		if (e.type == SDL_QUIT) {
 			quit = true;
 		}
+
 		renderer.PresentSceneTexture();
 	}
 
