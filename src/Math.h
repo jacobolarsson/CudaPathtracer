@@ -12,7 +12,7 @@ namespace Raytracer
     {
         vec3 hitPoint{};
         vec3 normal{};
-        float t = 0.0f;
+        float t = std::numeric_limits<float>::max();
     };
 
     struct Ray
@@ -22,7 +22,7 @@ namespace Raytracer
             , dir(d)
         {}
 
-        __device__ vec3 at(float t) const
+        __device__ inline vec3 at(float t) const
         {
             return orig + t * dir;
         }

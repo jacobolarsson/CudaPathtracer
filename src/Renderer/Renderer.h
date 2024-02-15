@@ -44,20 +44,22 @@ namespace Raytracer
 	class Renderer
 	{
 	public:
+		static const int cSquareDivisions = 64;
+		static const int cSquareDivisionsSqrt = 8;
+		static const int cThreadCount = 32;
+
 		Renderer(unsigned windowWidth,
-			unsigned windowHeight,
-			unsigned textureWidth,
-			unsigned textureHeight,
-			Scene* dScene,
-			std::unique_ptr<Camera>& camera,
-			int threadXCount = 8,
-		    int threadYCount = 8);
+				 unsigned windowHeight,
+				 unsigned textureWidth,
+				 unsigned textureHeight,
+				 Scene* dScene,
+				 std::unique_ptr<Camera>& camera);
 
 		~Renderer();
 
 		void Init();
-		void ComputeSceneTexture()const;
-		void PresentCurrentSceneTexture(int currentSamples);
+		void ComputeSceneTexture(int squareIdx, int squareIdxY);
+		void PresentCurrentSceneTexture(int squareIdxX, int squareIdxY);
 		void PresentSceneTexture();
 		void ExportTexture() const;
 
@@ -78,9 +80,8 @@ namespace Raytracer
 		Scene* m_dScene;
 		curandState* m_dRandStates;
 		std::unique_ptr<Camera> m_camera;
-		const int m_threadXCount;
-		const int m_threadYCount;
 		RenderConfig m_config;
+		vec3* m_deviceFb;
 	};
 	namespace DeviceFunc
 	{
@@ -93,8 +94,10 @@ namespace Raytracer
 			vec3 vertical,
 			vec3 origin,
 			curandState* dRandStates,
-			int bounces);
+			RenderConfig config,
+			int squareIdxX,
+			int squareIdxY);
 
-		__global__ void InitRandStates(int textureWidth, int textureHeight, curandState* dRandStates);
+		__global__ void InitRandStates(curandState* dRandStates);
 	}
 }

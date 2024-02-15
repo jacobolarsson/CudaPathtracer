@@ -15,19 +15,16 @@ namespace Raytracer
 			: m_filename(filename)
 			, m_dScene(scene)
 		{}
-		void LoadScene();
+		void LoadScene(KdTree* kdTree);
 		int GetObjectCount() const;
 		std::unique_ptr<Camera>& GetCamera() { return m_camera; }
 
 	private:
-		void SetVertexData(std::string const& filename,
-					  vec3 pos,
-					  vec3 orientation, 
-					  float scale, 
-					  vec3*& vertices, 
-					  int& vertexCount, 
-					  Face*& faces, 
-					  int& faceCount);
+		Mesh* CreateMesh(std::string const& filename,
+						 vec3 pos,
+						 vec3 orientation,
+						 float scale,
+						 MaterialType type);
 
 		std::string m_filename;
 		Scene* m_dScene;

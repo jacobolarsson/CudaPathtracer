@@ -10,9 +10,7 @@ Renderer::Renderer(unsigned windowWidth,
 				   unsigned textureWidth,
 				   unsigned textureHeight,
 				   Scene* dScene,
-	    		   std::unique_ptr<Camera>& camera,
-				   int threadXCount,
-				   int threadYCount)
+	    		   std::unique_ptr<Camera>& camera)
 	: m_windowWidth(windowWidth)
 	, m_windowHeight(windowHeight)
 	, m_textureWidth(textureWidth)
@@ -25,13 +23,11 @@ Renderer::Renderer(unsigned windowWidth,
 	, m_dScene(dScene)
 	, m_dRandStates(nullptr)
 	, m_camera(std::move(camera))
-	, m_threadXCount(threadXCount)
-	, m_threadYCount(threadYCount)
+	, m_deviceFb(nullptr)
 {
 	if (SDL_Init(SDL_INIT_VIDEO) != 0) {
 		throw std::exception("Could not initialize SDL");
 	}
-
 	// Create the window, the renderer and the texture to render
 	m_window = SDL_CreateWindow("Cuda Raytracer", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, windowWidth, windowHeight, SDL_WINDOW_SHOWN);
 	m_renderer = SDL_CreateRenderer(m_window, -1, SDL_RENDERER_ACCELERATED);
@@ -44,12 +40,16 @@ Renderer::Renderer(unsigned windowWidth,
 	size_t pixelCount = static_cast<size_t>(m_textureWidth) * static_cast<size_t>(m_textureHeight);
 	m_frameBuffer = new Pixel[pixelCount];
 
-	checkCudaErrors(cudaHostAlloc(&m_frameBufferVec, pixelCount * sizeof(vec3), cudaHostAllocMapped));
-	checkCudaErrors(cudaMalloc(&m_dRandStates, pixelCount * sizeof(curandState)));
+	const int squarePixelCount = m_textureHeight * m_textureWidth / cSquareDivisions;
+
+	checkCuda(cudaHostAlloc(&m_frameBufferVec, pixelCount * sizeof(vec3), cudaHostAllocMapped));
+	checkCuda(cudaMalloc(&m_dRandStates, squarePixelCount * cThreadCount * sizeof(curandState)));
 
 	for (int i = 0; i < pixelCount; i++) {
 		m_frameBufferVec[i] = { 0.0f, 0.0f, 0.0f };
 	}
+
+	checkCuda(cudaHostGetDevicePointer(&m_deviceFb, m_frameBufferVec, 0));
 
 	ReadRenderConfig();
 	Init();
@@ -57,7 +57,8 @@ Renderer::Renderer(unsigned windowWidth,
 
 Renderer::~Renderer()
 {
-	checkCudaErrors(cudaFreeHost(m_frameBufferVec));
+	checkCuda(cudaFreeHost(m_frameBufferVec));
+	checkCuda(cudaFree(m_dRandStates));
 	SDL_DestroyWindow(m_window);
 	SDL_DestroyRenderer(m_renderer);
 	SDL_DestroyTexture(m_texture);
@@ -66,44 +67,52 @@ Renderer::~Renderer()
 
 void Renderer::Init()
 {
-	dim3 blocks(m_textureWidth / m_threadXCount, m_textureHeight / m_threadYCount);
-	dim3 threads(m_threadXCount, m_threadYCount);
+	dim3 blocks(m_textureWidth / cSquareDivisionsSqrt, m_textureHeight / cSquareDivisionsSqrt);
+	dim3 threads(cThreadCount);
 
-	DeviceFunc::InitRandStates<<<blocks, threads>>>(m_textureWidth, m_textureHeight, m_dRandStates);
-	checkCudaErrors(cudaGetLastError());
-	checkCudaErrors(cudaDeviceSynchronize());
+	DeviceFunc::InitRandStates<<<blocks, threads>>>(m_dRandStates);
+	checkCuda(cudaGetLastError());
+	checkCuda(cudaDeviceSynchronize());
 }
 
-void Renderer::ComputeSceneTexture() const
+void Renderer::ComputeSceneTexture(int squareIdxX, int squareIdxY)
 {
-	dim3 blocks(m_textureWidth / m_threadXCount, m_textureHeight / m_threadYCount);
-	dim3 threads(m_threadXCount, m_threadYCount);
+	static dim3 blocks(m_textureWidth / cSquareDivisionsSqrt, m_textureHeight / cSquareDivisionsSqrt);
+	static dim3 threads(cThreadCount);
+	static vec3 targetVec = normalize(m_camera->target - m_camera->pos);
+	static vec3 horizontal = normalize(cross(targetVec, m_camera->up));
+	static vec3 vertical = normalize(cross(horizontal, targetVec));
+	static vec3 lowerLeftCorner = m_camera->pos - horizontal / 2.0f - vertical / 2.0f + targetVec * m_camera->focal;
 
-	vec3 targetVec = normalize(m_camera->target - m_camera->pos);
-	vec3 horizontal = normalize(cross(targetVec, m_camera->up));
-	vec3 vertical = normalize(cross(horizontal, targetVec));
-	vec3 lowerLeftCorner = m_camera->pos - horizontal / 2.0f - vertical / 2.0f + targetVec * m_camera->focal;
-
-	vec3* deviceFb;
-	checkCudaErrors(cudaHostGetDevicePointer(&deviceFb, m_frameBufferVec, 0));
-
-	DeviceFunc::render<<<blocks, threads>>>(deviceFb,
-										    m_dScene,
-										    m_textureWidth,
-										    m_windowHeight,
-										    lowerLeftCorner,
-										    horizontal,
-										    vertical,
-										    m_camera->pos,
-										    m_dRandStates,
-										    m_config.bounces);
+	DeviceFunc::render<<<blocks, threads>>>(m_deviceFb,
+											m_dScene,
+											m_textureWidth,
+											m_windowHeight,
+											lowerLeftCorner,
+											horizontal,
+											vertical,
+											m_camera->pos,
+											m_dRandStates,
+											m_config,
+											squareIdxX,
+											squareIdxY);
+	checkCuda(cudaGetLastError());
+	checkCuda(cudaDeviceSynchronize());
 }
 
-void Renderer::PresentCurrentSceneTexture(int currentSamples)
+void Renderer::PresentCurrentSceneTexture(int squareIdxX, int squareIdxY)
 {
-	size_t pixelCount = static_cast<size_t>(m_textureWidth) * static_cast<size_t>(m_textureHeight);
-	for (int i = 0; i < pixelCount; i++) {
-		m_frameBuffer[i] = Pixel(m_frameBufferVec[i], currentSamples);
+	int squareWidth = m_textureWidth / cSquareDivisionsSqrt;
+	int squareHeight = m_textureHeight / cSquareDivisionsSqrt;
+	// Inverse the square index so that we start from the bottom
+	squareIdxY = cSquareDivisionsSqrt - 1 - squareIdxY;
+	// Copy the content of the given square of pixels into the frame buffer
+	for (int i = 0; i < squareHeight; i++) {
+		for (int j = 0; j < squareWidth; j++) {
+			int squareGridOff = squareIdxY * m_textureWidth * squareHeight + squareIdxX * squareWidth;
+			int idx = squareGridOff + i * m_textureWidth + j;
+			m_frameBuffer[idx] = Pixel(m_frameBufferVec[idx], m_config.samples);
+		}
 	}
 
 	SDL_UpdateTexture(m_texture, nullptr, m_frameBuffer, sizeof(Pixel) * m_textureWidth);
@@ -139,7 +148,6 @@ void Renderer::ReadRenderConfig()
 	if (!file.is_open()) {
 		throw std::runtime_error("Could not open config.txt file");
 	}
-
 	std::string str{};
 	while (!file.eof()) {
 		str = "";
@@ -148,7 +156,8 @@ void Renderer::ReadRenderConfig()
 		if (str == "SAMPLES") {
 			str = "";
 			file >> str;
-			m_config.samples = std::atoi(str.c_str());
+			// Sample count must be a multiple of the thread count per block
+			m_config.samples = ((std::atoi(str.c_str()) + cThreadCount - 1) / cThreadCount) * cThreadCount;
 		}
 		else if (str == "BOUNCES") {
 			str = "";
@@ -167,34 +176,51 @@ __global__ void DeviceFunc::render(vec3* fb,
 								  vec3 vertical,
 								  vec3 origin,
 								  curandState* dRandStates,
-								  int bounces)
+								  RenderConfig config,
+								  int squareIdxX,
+								  int squareIdxY)
 {
-	int xIdx = threadIdx.x + blockIdx.x * blockDim.x;
-	int yIdx = threadIdx.y + blockIdx.y * blockDim.y;
+	const int iterations = config.samples / Renderer::cThreadCount;
+	const int squareWidth = textureWidth / Renderer::cSquareDivisionsSqrt;
+	// Screen indices
+	int xIdx = squareIdxX * squareWidth + blockIdx.x;
+	int yIdx = squareIdxY * squareWidth + blockIdx.y;
+
 	if ((xIdx >= textureWidth) || (yIdx >= textureHeight)) {
 		return;
 	}
+
+	int randStateIdx = blockIdx.y * gridDim.x + blockIdx.x + threadIdx.x;
+
 	int pixelIdx = (textureHeight - yIdx - 1) * textureWidth + xIdx;
+	// Shared memory variable to accumulate the color value
+	__shared__ vec3 color[Renderer::cThreadCount];
+	color[threadIdx.x] = { 0.0f, 0.0f, 0.0f };
 
-	vec3 color = { 0.0f, 0.0f, 0.0f };
-	for (int i = 0; i < 10; i++)
-	{
-		float u = (static_cast<float>(xIdx) + curand_uniform(&dRandStates[pixelIdx])) / textureWidth;
-		float v = (static_cast<float>(yIdx) + curand_uniform(&dRandStates[pixelIdx])) / textureHeight;
+	vec3 c = { 0.0f, 0.0f, 0.0f };
+	// Cast rays
+	for (int i = 0; i < iterations; i++) {
+		// Apply small random offset to achieve anti-aliasing
+		float u = (static_cast<float>(xIdx) + curand_uniform(&dRandStates[randStateIdx])) / textureWidth;
+		float v = (static_cast<float>(yIdx) + curand_uniform(&dRandStates[randStateIdx])) / textureHeight;
 		Ray r(origin, glm::normalize(lowerLeftCorner + u * horizontal + v * vertical - origin));
-		color += dScene->QueryRay(r, bounces, &dRandStates[pixelIdx]);
 
+		c += dScene->QueryRay(r, config.bounces, &dRandStates[randStateIdx]);
 	}
-	fb[pixelIdx] += color;
+	__syncthreads();
+	color[threadIdx.x] = c;
+	if (threadIdx.x == 0) {
+		vec3 res = { 0.0f, 0.0f, 0.0f };
+		// Accumulate the color computed by every thread in this block
+		for (int i = 0; i < Renderer::cThreadCount; i++) {
+			res += color[i];
+		}
+		fb[pixelIdx] = res;
+	}
 }
 
-__global__ void DeviceFunc::InitRandStates(int textureWidth, int textureHeight, curandState* dRandStates)
+__global__ void DeviceFunc::InitRandStates(curandState* dRandStates)
 {
-	int i = threadIdx.x + blockIdx.x * blockDim.x;
-	int j = threadIdx.y + blockIdx.y * blockDim.y;
-	if ((i >= textureWidth) || (j >= textureHeight)) {
-		return;
-	}
-	int pixelIdx = j * textureWidth + i;
+	int pixelIdx = blockIdx.y * gridDim.x + blockIdx.x + threadIdx.x;
 	curand_init(pixelIdx, 0, 0, &dRandStates[pixelIdx]);
 }

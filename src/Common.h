@@ -26,7 +26,7 @@ using glm::mat4;
 
 namespace Raytracer
 {
-	#define checkCudaErrors(val) check_cuda( (val), #val, __FILE__, __LINE__ )
+	#define checkCuda(val) check_cuda( (val), #val, __FILE__, __LINE__ )
 	#define checkCuRandErrors(val) check_curand( (val), #val, __FILE__, __LINE__ )
 
 	void check_cuda(cudaError_t result, char const* const func, const char* const file, int const line);

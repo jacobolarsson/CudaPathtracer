@@ -19,6 +19,9 @@
     <Filter Include="Camera">
       <UniqueIdentifier>{4de4db0a-f077-4e8d-bb5c-860f003c735a}</UniqueIdentifier>
     </Filter>
+    <Filter Include="KdTree">
+      <UniqueIdentifier>{e3e4d66f-3ce3-4cb9-9f46-aa9ef77cfd7a}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="src\Math.h" />
@@ -41,6 +44,9 @@
     <ClInclude Include="src\Camera\Camera.h">
       <Filter>Camera</Filter>
     </ClInclude>
+    <ClInclude Include="src\KdTree\KdTree.h">
+      <Filter>KdTree</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <CudaCompile Include="src\main.cu" />
@@ -60,5 +66,8 @@
       <Filter>Material</Filter>
     </CudaCompile>
     <CudaCompile Include="src\Common.cu" />
+    <CudaCompile Include="src\KdTree\KdTree.cu">
+      <Filter>KdTree</Filter>
+    </CudaCompile>
   </ItemGroup>
 </Project>

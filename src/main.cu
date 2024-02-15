@@ -2,7 +2,7 @@
  * @file main.cpp
  *
  * @author jacobo.larsson
- * @date 05/22/2023
+ * @date 07/22/2023
  * @brief This project contains a raytracer renderer
  *
  */
@@ -12,7 +12,20 @@
 #include "Renderer/Renderer.h"
 #include "Parser/Parser.h"
 
+#include <chrono>
+
 using namespace Raytracer;
+using Timer = std::chrono::high_resolution_clock;
+
+void LogTime(const char* what, Timer::time_point start, Timer::time_point end)
+{
+	std::cout 
+		<< what 
+		<< " took "
+		<< std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count() 
+		<< " ms"
+		<< std::endl;
+}
 
 int main(int argc, char* argv[])
 {
@@ -23,56 +36,90 @@ int main(int argc, char* argv[])
     const int windowHeight = 1024;
 
 	Scene* dScene;
-	checkCudaErrors(cudaMalloc(&dScene, sizeof(Scene)));
+	checkCuda(cudaMalloc(&dScene, sizeof(Scene)));
 	
-	Parser parser("A3_Suzanne.txt", dScene);
+	Parser parser("A4_Box_Transmission.txt", dScene);
 	GameObject** dObjects;
+	KdTree kdTree;
 	int size = parser.GetObjectCount();
 
-	checkCudaErrors(cudaMalloc(&dObjects, sizeof(GameObject*) * size));
+	// Allocate memory for the scene and the kd-tree
+	checkCuda(cudaMalloc(&dObjects, sizeof(GameObject*) * size));
 
 	DeviceFunc::CreateScene<<<1, 1>>>(dScene, dObjects, size);
+	checkCuda(cudaDeviceSynchronize());
 
-	parser.LoadScene();
+	Timer::time_point start;
+	// Populate the scene using data from a given scene file
+	parser.LoadScene(&kdTree);
+	start = Timer::now();
+	kdTree.CreateTree();
+	LogTime("Creating the kdTree", start, Timer::now());
 
-	Renderer renderer(windowWidth, windowHeight, textureWidth, textureHeight, dScene, parser.GetCamera());
+	int nodeCount = static_cast<int>(kdTree.GetNodes().size());
+	int primCount = static_cast<int>(kdTree.GetPrimitives().size());
+	int meshCount = static_cast<int>(kdTree.GetMeshes().size());
+	// Allocate device memory for the kd-tree nodes and triagles
 
-	clock_t start, stop;
-	start = clock();
+	KdNode* dKdNodes;
+	Triangle* dPrimitives;
+	BoundingVolume* dBoundingVol;
+	Mesh* dMeshes;
+	start = Timer::now();
+	checkCuda(cudaMalloc(&dKdNodes, nodeCount * sizeof(KdNode)));
+	checkCuda(cudaMalloc(&dPrimitives, primCount * sizeof(Triangle)));
+	checkCuda(cudaMalloc(&dBoundingVol, sizeof(BoundingVolume)));
+	checkCuda(cudaMalloc(&dMeshes, sizeof(Mesh) * kdTree.GetMeshes().size()));
+
+	// Send the kd-tree data to the device allocated scene
+	checkCuda(cudaMemcpy(dKdNodes, kdTree.GetNodes().data(), nodeCount * sizeof(KdNode), cudaMemcpyHostToDevice));
+	checkCuda(cudaMemcpy(dPrimitives, kdTree.GetPrimitives().data(), primCount * sizeof(Triangle), cudaMemcpyHostToDevice));
+	checkCuda(cudaMemcpy(dBoundingVol, &kdTree.GetBoundingVolume(), sizeof(BoundingVolume), cudaMemcpyHostToDevice));
+	checkCuda(cudaMemcpy(dMeshes, kdTree.GetMeshes().data(), sizeof(Mesh) * meshCount, cudaMemcpyHostToDevice));
+
+	DeviceFunc::SetKdNodes<<<1, 1>>>(dScene, dKdNodes, nodeCount, dPrimitives, primCount, dBoundingVol, dMeshes);
+	checkCuda(cudaDeviceSynchronize());
+
+	LogTime("Copying the kdTree into DRAM", start, Timer::now());
+	std::cout << std::endl;
+
+	Renderer renderer(windowWidth,
+					  windowHeight,
+					  textureWidth,
+					  textureHeight,
+					  dScene, parser.GetCamera());
+
+	Timer::time_point totalStart = Timer::now();
 	SDL_Event e;
 	bool quit = false;
-	for (int i = 0; i < renderer.GetConfig().samples; i += 10) {
-		renderer.ComputeSceneTexture();
 
-		checkCudaErrors(cudaDeviceSynchronize());
-		renderer.PresentCurrentSceneTexture(i);
+	for (int i = 0; i < Renderer::cSquareDivisionsSqrt; i++) {
+		for (int j = 0; j < Renderer::cSquareDivisionsSqrt; j++) {
+			start = Timer::now();
+			renderer.ComputeSceneTexture(j, i);
+			renderer.PresentCurrentSceneTexture(j, i);
 
-		stop = clock();
-		double timer_seconds = ((double)(stop - start)) / CLOCKS_PER_SEC;
-		std::cout << timer_seconds << " seconds.\n";
+			LogTime(std::string("Rendering square[" +
+								std::to_string(i) +
+								"][" + std::to_string(j) +
+								"]").c_str(), start, Timer::now());
+		}
 	}
-
-	checkCudaErrors(cudaGetLastError());
-	checkCudaErrors(cudaDeviceSynchronize());
-
-	renderer.PresentCurrentSceneTexture(renderer.GetConfig().samples - 1);
-	stop = clock();
-	double timer_seconds = ((double)(stop - start)) / CLOCKS_PER_SEC;
-	std::cout << timer_seconds << " seconds.\n";
-	std::cout << "FINISHED\n";
+	LogTime("\nTotal rendering", totalStart, Timer::now());
 
 	while (!quit) {
 		SDL_WaitEvent(&e);
 		if (e.type == SDL_QUIT) {
 			quit = true;
 		}
-
 		renderer.PresentSceneTexture();
 	}
+	renderer.ExportTexture();
 
 	DeviceFunc::ClearScene<<<1, 1>>>(dScene);
-	checkCudaErrors(cudaFree(dScene));
-	checkCudaErrors(cudaFree(dObjects));
+	checkCuda(cudaDeviceSynchronize());
+	checkCuda(cudaFree(dScene));
+	checkCuda(cudaFree(dObjects));
 
     return 0;
 }

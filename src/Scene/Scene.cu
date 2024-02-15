@@ -13,9 +13,13 @@ __device__ void Scene::CreateSphere(vec3 pos,
 									int index,
 									MaterialType matType,
 									vec3 color,
-									float roughness)
+									float roughness,
+								    float ior,
+								    vec3 att)
 {
-	m_objects[index] = new Sphere(pos, CreateMaterial(matType, color, roughness), radius);
+	Material* mat;
+	DeviceFunc::CreateMaterial(matType, color, mat, roughness, ior, att);
+	m_objects[index] = new Sphere(pos, mat, radius);
 }
 
 __device__ void Scene::CreateBox(vec3 pos,
@@ -25,22 +29,28 @@ __device__ void Scene::CreateBox(vec3 pos,
 								 int index,
 								 MaterialType matType,
 								 vec3 color,
-								 float roughness)
+								 float roughness,
+								 float ior,
+								 vec3 att)
 {
-	m_objects[index] = new Box(pos, CreateMaterial(matType, color, roughness), length, width, height);
+	Material* mat;
+	DeviceFunc::CreateMaterial(matType, color, mat, roughness, ior, att);
+	m_objects[index] = new Box(pos, mat, length, width, height);
 }
 
-__device__ void Scene::CreateMesh(vec3 pos,
-								  vec3* vertices, 
-								  int vtxCount, 
-								  Face* faces,
-								  int facesCount, 
-								  int index, 
-								  MaterialType matType, 
-								  vec3 color, 
-								  float roughness)
+__device__ void Scene::CreatePoly(vec3 pos,
+								  vec3* vertices,
+								  int vtxCount,
+								  int index,
+								  MaterialType matType,
+								  vec3 color,
+								  float roughness,
+								  float ior,
+								  vec3 att)
 {
-	m_objects[index] = new Mesh(pos, CreateMaterial(matType, color, roughness), vertices, vtxCount, faces, facesCount);
+	Material* mat;
+	DeviceFunc::CreateMaterial(matType, color, mat, roughness, ior, att);
+	m_objects[index] = new Polygon(pos, mat, vertices, vtxCount);
 }
 
 __device__ vec3 Scene::QueryRay(Ray const& ray, int depth, curandState* randState) const
@@ -49,7 +59,7 @@ __device__ vec3 Scene::QueryRay(Ray const& ray, int depth, curandState* randStat
 
 	vec3 resultColor(1.0f, 1.0f, 1.0f);
 	Ray newRay = ray;
-
+	// Check for inersection with all the objects that are not present in the kd-tree
 	for (int i = 0; i < depth; i++) {
 		HitData closestHit;
 		float minT = cInfinity;
@@ -63,41 +73,85 @@ __device__ vec3 Scene::QueryRay(Ray const& ray, int depth, curandState* randStat
 				closestHit = hit;
 			}
 		}
+
+		HitData hit;
+		Mesh* hitMesh = KdTree::RayHits(newRay,
+										hit,
+										minT,
+										m_kdNodes,
+										m_kdNodeCount,
+										m_primitives,
+										m_primCount, 
+										m_kdBv,
+										m_meshes);
 		// No hit
-		if (hitObjIdx == -1) {
+		if (hitObjIdx == -1 && !hitMesh) {
 			return resultColor * m_ambient;
 		}
-
+		// If an intersection occurs with the kd-tree object, and
+		// it's time of instersection is smaller
+		if (hitMesh) {
+			resultColor = vec3(0.0f, 0.0f, 0.0f);
+			continue;
+		}
 		GameObject* hitObj = m_objects[hitObjIdx];
+
 		// If we are not to bounce the ray, return the object's color multiplied
 		// with the accummulated colors
 		if (!hitObj->GetMaterial()->BounceRay(newRay, closestHit, newRay, randState)) {
 			return resultColor * hitObj->GetMaterial()->GetColor();
 		}
-
 		resultColor *= hitObj->GetMaterial()->GetColor();
 	}
-
 	return vec3{ 0.0f, 0.0f, 0.0f };
-	//return 0.5f * vec3(hitData.normal.x + 1.0f, hitData.normal.y + 1.0f, hitData.normal.z + 1.0f);
 }
 
 __device__ void Raytracer::Scene::Clear()
 {
-	for (int i = 0; i < m_size; i++) {
-		delete m_objects[i];
+	if (threadIdx.x != 0 || blockIdx.x != 0) {
+		return;
+	}
+	delete[] m_objects;
+
+	cudaFree(m_kdNodes);
+	cudaFree(m_primitives);
+	cudaFree(&m_kdBv);
+	cudaFree(m_meshes);
+}
+
+__device__ void DeviceFunc::CreateMaterial(MaterialType type,
+										    vec3 color,
+										    Material*& mat,
+										    float roughtness,
+										    float ior,
+										    vec3 att)
+{
+	if (type == MaterialType::LAMBERTIAN) {
+		mat = new Lambertian(color);
+	} else if (type == MaterialType::METAL) {
+		mat = new Metal(color, roughtness);
+	} else if (type == MaterialType::DIELECTRIC) {
+		mat = new Dielectric(color, ior, att);
+	} else if (type == MaterialType::LIGHT) {
+		mat = new Light(color);
 	}
 }
 
-__device__ Material* Scene::CreateMaterial(MaterialType type, vec3 color, float roughtness)
+__global__ void DeviceFunc::SetKdNodes(Scene* scene,
+									   KdNode* kdNodes,
+									   int kdNodeCount,
+									   Triangle* primitives,
+									   int primCount,
+									   BoundingVolume* boundingVolume,
+									   Mesh* meshes)
 {
-	if (type == MaterialType::LAMBERTIAN) {
-		return new Lambertian(color);
-	} else if (type == MaterialType::METAL) {
-		return new Metal(color, roughtness);
-	} else if (type == MaterialType::LIGHT) {
-		return new Light(color);
+	if (threadIdx.x != 0 || blockIdx.x != 0) {
+		return;
 	}
+	scene->SetKdNodes(kdNodes, kdNodeCount);
+	scene->SetPrimitives(primitives, primCount);
+	scene->SetKdBoundingVol(boundingVolume);
+	scene->SetMeshes(meshes);
 }
 
 __global__ void DeviceFunc::CreateScene(Scene* scene, GameObject** objects, int size)
@@ -114,12 +168,14 @@ __global__ void DeviceFunc::CreateSphere(Scene* scene,
 										 int index,
 										 MaterialType matType,
 										 vec3 color,
-										 float roughness)
+										 float roughness,
+										 float ior,
+										 vec3 att)
 {
 	if (threadIdx.x != 0 || blockIdx.x != 0) {
 		return;
 	}
-	scene->CreateSphere(pos, radius, index, matType, color, roughness);
+	scene->CreateSphere(pos, radius, index, matType, color, roughness, ior, att);
 }
 
 __global__ void DeviceFunc::CreateBox(Scene* scene,
@@ -130,29 +186,31 @@ __global__ void DeviceFunc::CreateBox(Scene* scene,
 									  int index,
 									  MaterialType matType,
 									  vec3 color,
-									  float roughness)
+									  float roughness,
+									  float ior,
+									  vec3 att)
 {
 	if (threadIdx.x != 0 || blockIdx.x != 0) {
 		return;
 	}
-	scene->CreateBox(pos, length, width, height, index, matType, color, roughness);
+	scene->CreateBox(pos, length, width, height, index, matType, color, roughness, ior, att);
 }
 
-__global__ void DeviceFunc::CreateMesh(Scene* scene,
-									   vec3 pos, 
-									   vec3* vertices, 
-									   int vtxCount, 
-									   Face* faces,
-									   int faceCount, 
+__global__ void DeviceFunc::CreatePoly(Scene* scene,
+									   vec3 pos,
+									   vec3* vertices,
+									   int vtxCount,
 									   int index,
-									   MaterialType matType, 
-									   vec3 color, 
-									   float roughness)
+									   MaterialType matType,
+									   vec3 color,
+									   float roughness,
+									   float ior,
+									   vec3 att)
 {
 	if (threadIdx.x != 0 || blockIdx.x != 0) {
 		return;
 	}
-	scene->CreateMesh(pos, vertices, vtxCount, faces, faceCount, index, matType, color, roughness);
+	scene->CreatePoly(pos, vertices, vtxCount, index, matType, color, roughness, ior, att);
 }
 
 __global__ void DeviceFunc::SetAmbient(Scene* scene, vec3 color)
@@ -163,7 +221,10 @@ __global__ void DeviceFunc::SetAmbient(Scene* scene, vec3 color)
 	scene->SetAmbient(color);
 }
 
-__global__ void Raytracer::DeviceFunc::ClearScene(Scene* scene)
+__global__ void DeviceFunc::ClearScene(Scene* scene)
 {
+	if (threadIdx.x != 0 || blockIdx.x != 0) {
+		return;
+	}
 	scene->Clear();
 }

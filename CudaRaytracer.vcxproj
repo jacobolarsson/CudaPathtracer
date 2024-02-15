@@ -17,6 +17,7 @@
       <GenerateRelocatableDeviceCode Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</GenerateRelocatableDeviceCode>
       <GenerateRelocatableDeviceCode Condition="'$(Configuration)|$(Platform)'=='Release|x64'">true</GenerateRelocatableDeviceCode>
     </ClInclude>
+    <ClInclude Include="src\KdTree\KdTree.h" />
     <ClInclude Include="src\Material\Material.h" />
     <ClInclude Include="src\Math.h" />
     <ClInclude Include="src\Parser\Parser.h" />
@@ -29,6 +30,7 @@
       <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ExcludedFromBuild>
       <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</ExcludedFromBuild>
     </CudaCompile>
+    <CudaCompile Include="src\KdTree\KdTree.cu" />
     <CudaCompile Include="src\main.cu" />
     <CudaCompile Include="src\Material\Material.cu" />
     <CudaCompile Include="src\Renderer\Renderer.cu">

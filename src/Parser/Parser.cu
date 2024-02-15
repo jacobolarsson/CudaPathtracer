@@ -53,13 +53,12 @@ vec3 ReadVec3(std::ifstream& file)
 	return vec;
 }
 
-void Parser::LoadScene()
+void Parser::LoadScene(KdTree* kdTree)
 {
 	std::ifstream file(m_filename);
 	if (!file.is_open()) {
 		throw std::runtime_error("Could not open scene file");
 	}
-
 	int count = GetObjectCount();
 	std::string str{};
 	int index = 0;
@@ -85,11 +84,20 @@ void Parser::LoadScene()
 			if (str == "DIFFUSE") {
 				vec3 color = ReadVec3(file);
 				DeviceFunc::CreateSphere<<<1, 1>>>(m_dScene, pos, radius, index++, MaterialType::LAMBERTIAN, color);
+				checkCuda(cudaDeviceSynchronize());
 			}
 			else if (str == "METAL") {
 				vec3 color = ReadVec3(file);
 				float roughness = ReadFloat(file);
 				DeviceFunc::CreateSphere<<<1, 1>>>(m_dScene, pos, radius, index++, MaterialType::METAL, color, roughness);
+				checkCuda(cudaDeviceSynchronize());
+			}
+			else if (str == "DIELECTRIC") {
+				vec3 color = ReadVec3(file);
+				float ior = ReadFloat(file);
+				vec3 att = ReadVec3(file);
+				DeviceFunc::CreateSphere<<<1, 1>>>(m_dScene, pos, radius, index++, MaterialType::DIELECTRIC, color, 0.0f, ior, att);
+				checkCuda(cudaDeviceSynchronize());
 			}
 		}
 		// Load box objects' data
@@ -105,11 +113,20 @@ void Parser::LoadScene()
 			if (str == "DIFFUSE") {
 				vec3 color = ReadVec3(file);
 				DeviceFunc::CreateBox<<<1, 1>>>(m_dScene, pos, length, width, height, index++, MaterialType::LAMBERTIAN, color);
+				checkCuda(cudaDeviceSynchronize());
 			}
-			if (str == "METAL") {
+			else if (str == "METAL") {
 				vec3 color = ReadVec3(file);
 				float roughness = ReadFloat(file);
 				DeviceFunc::CreateBox<<<1, 1>>>(m_dScene, pos, length, width, height, index++, MaterialType::METAL, color, roughness);
+				checkCuda(cudaDeviceSynchronize());
+			}
+			else if (str == "DIELECTRIC") {
+				vec3 color = ReadVec3(file);
+				float ior = ReadFloat(file);
+				vec3 att = ReadVec3(file);
+				DeviceFunc::CreateBox<<<1, 1>>>(m_dScene, pos, length, width, height, index++, MaterialType::DIELECTRIC, color, 0.0f, ior, att);
+				checkCuda(cudaDeviceSynchronize());
 			}
 		}
 		// Load mesh objects' data
@@ -120,31 +137,51 @@ void Parser::LoadScene()
 			vec3 orientation = glm::radians(ReadVec3(file));
 			float scale = ReadFloat(file);
 
+			std::getline(file, str);
+			file >> str;
+
+			if (str == "DIFFUSE") {
+				Mesh* mesh = CreateMesh(filename, pos, orientation, scale, MaterialType::LAMBERTIAN);
+				kdTree->AddMesh(mesh);
+			}
+			else if (str == "METAL") {
+				Mesh* mesh = CreateMesh(filename, pos, orientation, scale, MaterialType::METAL);
+				kdTree->AddMesh(mesh);
+			}
+			else if (str == "DIELECTRIC") {
+				Mesh* mesh = CreateMesh(filename, pos, orientation, scale, MaterialType::DIELECTRIC);
+				kdTree->AddMesh(mesh);
+			}
+		}
+		// Load polygon objects' data
+		else if (str == "POLYGON") {
+			int vtxCount = ReadInt(file);
 			vec3* vertices;
-			Face* faces;
-			int vtxCount, faceCount;
-			SetVertexData(filename, pos, orientation, scale, vertices, vtxCount, faces, faceCount);
+			checkCuda(cudaMallocManaged(&vertices, vtxCount * sizeof(vec3)));
 
-			vec3* dVertices;
-			Face* dFaces;
-
-			//checkCudaErrors(cudaMalloc(&dVertices, vtxCount * sizeof(vec3)));
-			//checkCudaErrors(cudaMalloc(&dFaces, faceCount * sizeof(Face)));
-
-			//checkCudaErrors(cudaMemcpy(dVertices, vertices, vtxCount * sizeof(vec3), cudaMemcpyHostToDevice));
-			//checkCudaErrors(cudaMemcpy(dFaces, faces, faceCount * sizeof(Face), cudaMemcpyHostToDevice));
-
+			for (int i = 0; i < vtxCount; i++) {
+				vertices[i] = ReadVec3(file);
+			}
 			std::getline(file, str);
 			file >> str;
 
 			if (str == "DIFFUSE") {
 				vec3 color = ReadVec3(file);
-				DeviceFunc::CreateMesh<<<1, 1>>>(m_dScene, pos, vertices, vtxCount, faces, faceCount, index++, MaterialType::LAMBERTIAN, color);
+				DeviceFunc::CreatePoly<<<1, 1>>>(m_dScene, vec3(0.0f), vertices, vtxCount, index++, MaterialType::LAMBERTIAN, color);
+				checkCuda(cudaDeviceSynchronize());
 			}
-			if (str == "METAL") {
+			else if (str == "METAL") {
 				vec3 color = ReadVec3(file);
 				float roughness = ReadFloat(file);
-				DeviceFunc::CreateMesh<<<1, 1>>>(m_dScene, pos, vertices, vtxCount, faces, faceCount, index++, MaterialType::METAL, color, roughness);
+				DeviceFunc::CreatePoly<<<1, 1>>>(m_dScene, vec3(0.0f), vertices, vtxCount, index++, MaterialType::METAL, color, roughness);
+				checkCuda(cudaDeviceSynchronize());
+			}
+			else if (str == "DIELECTRIC") {
+				vec3 color = ReadVec3(file);
+				float ior = ReadFloat(file);
+				vec3 att = ReadVec3(file);
+				DeviceFunc::CreatePoly<<<1, 1 >>>(m_dScene, vec3(0.0f), vertices, vtxCount, index++, MaterialType::DIELECTRIC, color, 0.0f, ior, att);
+				checkCuda(cudaDeviceSynchronize());
 			}
 		}
 
@@ -154,11 +191,13 @@ void Parser::LoadScene()
 			float radius = ReadFloat(file);
 			vec3 color = ReadVec3(file);
 			DeviceFunc::CreateSphere<<<1, 1>>>(m_dScene, pos, radius, index++, MaterialType::LIGHT, color);
+			checkCuda(cudaDeviceSynchronize());
 		}
 
 		// Load ambient light
 		else if (str == "AMBIENT") {
 			DeviceFunc::SetAmbient<<<1, 1>>>(m_dScene, ReadVec3(file));
+			checkCuda(cudaDeviceSynchronize());
 		}
 		// Load camera data
 		else if (str == "CAMERA") {
@@ -178,14 +217,13 @@ int Parser::GetObjectCount() const
 	if (!file.is_open()) {
 		throw std::runtime_error("Could not open scene file");
 	}
-
 	int count = 0;
 	std::string str{};
 	// Count how many objects are in the scene file
 	while (!file.eof()) {
 		str = "";
 		file >> str;
-		if (str == "DIFFUSE" || str == "LIGHT" || str == "METAL" || str == "DIELECTRIC") {
+		if (str == "SPHERE" || str == "LIGHT" || str == "BOX" || str == "POLYGON") {
 			count++;
 		}
 		std::getline(file, str);
@@ -193,14 +231,7 @@ int Parser::GetObjectCount() const
 	return count;
 }
 
-void Parser::SetVertexData(std::string const& filename,
-						   vec3 pos,
-						   vec3 orientation, 
-						   float scale, 
-						   vec3*& vertices, 
-						   int& vertexCount, 
-						   Face*& faces, 
-						   int& faceCount)
+Mesh* Parser::CreateMesh(std::string const& filename, vec3 pos, vec3 orientation,  float scale, MaterialType type)
 {
 	tinyobj::ObjReader reader;
 
@@ -217,15 +248,17 @@ void Parser::SetVertexData(std::string const& filename,
 	tinyobj::attrib_t const& attrib = reader.GetAttrib();
 	std::vector<tinyobj::shape_t> const& shapes = reader.GetShapes();
 
-	vertexCount = attrib.vertices.size() / 3;
-	faceCount = shapes.at(0).mesh.num_face_vertices.size();
+	int vertexCount = static_cast<int>(attrib.vertices.size() / 3);
+	int faceCount = static_cast<int>(shapes.at(0).mesh.num_face_vertices.size());
+
+	vec3* vertices;
+	Face* faces;
+	BoundingVolume* faceBvs;
 
 	// Allocate unified memory for the vertex data
-	checkCudaErrors(cudaMallocManaged(&vertices, vertexCount * sizeof(vec3)));
-	checkCudaErrors(cudaMallocManaged(&faces, faceCount * sizeof(Face)));
-
-	//checkCudaErrors(cudaMallocHost(&vertices, vertexCount * sizeof(vec3)));
-	//checkCudaErrors(cudaMallocHost(&faces, faceCount * sizeof(Face)));
+	checkCuda(cudaMallocManaged(&vertices, vertexCount * sizeof(vec3)));
+	checkCuda(cudaMallocManaged(&faces, faceCount * sizeof(Face)));
+	checkCuda(cudaMallocManaged(&faceBvs, faceCount * sizeof(BoundingVolume)));
 
 	// Copy the mesh vertices
 	for (size_t i = 0, j = 0; i < attrib.vertices.size(); i += 3, j++) {
@@ -249,12 +282,21 @@ void Parser::SetVertexData(std::string const& filename,
 		vertices[i] = modelToWorld * vec4(vertices[i], 1.0f);
 	}
 
-	// Once we have all the vertices in world space, compute the face normals
+	// Once we have all the vertices in world space, compute the face normals and the triangle
+	// bounding volume
 	for (int i = 0; i < faceCount; i++) {
 		vec3 v0 = vertices[faces[i].vtxIndices[0]];
 		vec3 v1 = vertices[faces[i].vtxIndices[1]];
 		vec3 v2 = vertices[faces[i].vtxIndices[2]];
 
 		faces[i].faceNormal = normalize(cross(v1 - v0, v2 - v0));
+		faceBvs[i].min = glm::min(glm::min(v0, v1), v2);
+		faceBvs[i].max = glm::max(glm::max(v0, v1), v2);
 	}
+
+	Mesh* mesh;
+	checkCuda(cudaMallocManaged(&mesh, sizeof(Mesh)));
+	*mesh = { pos, nullptr, vertices, vertexCount, faces, faceCount, faceBvs };
+
+	return mesh;
 }

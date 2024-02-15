@@ -12,8 +12,8 @@ namespace Raytracer
 		__device__ virtual bool BounceRay(Ray const&,
 										  HitData const&,
 										  Ray&,
-										  curandState* randState) const = 0;
-		__device__ vec3 GetColor() const { return m_color; }
+										  curandState* randState) = 0;
+		__device__ virtual vec3 GetColor() const { return m_color; }
 
 	protected:
 		vec3 m_color;
@@ -22,18 +22,18 @@ namespace Raytracer
 	class Lambertian : public Material
 	{
 	public:
-		__device__ Lambertian(vec3 color) : Material(color) {}
+		__host__ __device__ Lambertian(vec3 color) : Material(color) {}
 
 		__device__ bool BounceRay(Ray const& ray,
 								  HitData const& hitData,
 								  Ray& newRay,
-								  curandState* randState) const override;
+								  curandState* randState) override;
 	};
 
 	class Metal : public Material
 	{
 	public:
-		__device__ Metal(vec3 color, float roughness)
+		__host__ __device__ Metal(vec3 color, float roughness)
 			: Material(color)
 			, m_roughness(roughness)
 		{}
@@ -41,10 +41,38 @@ namespace Raytracer
 		__device__ bool BounceRay(Ray const& ray,
 								  HitData const& hitData,
 								  Ray& newRay,
-								  curandState* randState) const override;
+								  curandState* randState) override;
 
 	private:
 		float m_roughness;
+	};
+
+	class Dielectric : public Material
+	{
+	public:
+		__host__ __device__ Dielectric(vec3 color, float ior, vec3 att)
+			: Material(color)
+			, m_ior(ior)
+			, m_att(att)
+			, m_applyAtt(false)
+			, m_timeInsideMat(0.0f)
+		{}
+
+		__device__ bool BounceRay(Ray const& ray,
+					   HitData const& hitData,
+					   Ray& newRay,
+					   curandState* randState) override;
+
+		__device__ vec3 GetColor() const override
+		{
+			return m_applyAtt ? m_color * glm::pow(m_att, vec3(m_timeInsideMat)) : m_color;
+		}
+
+	private:
+		float m_ior;
+		vec3 m_att;
+		bool m_applyAtt;
+		float m_timeInsideMat;
 	};
 
 	class Light : public Material
@@ -55,7 +83,7 @@ namespace Raytracer
 		__device__ bool BounceRay(Ray const&,
 								  HitData const&,
 								  Ray&,
-								  curandState*) const override
+								  curandState*) override
 		{ return false; }
 	};
 }
