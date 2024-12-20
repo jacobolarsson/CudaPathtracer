@@ -27,11 +27,16 @@ GPU-accelerated rendering engine built from scratch using C++ and CUDA. It imple
 - Single threaded: 21 minutes 56 seconds
 - Using CUDA: 12.577 seconds
 
+## Documentation
+[Download project post-mortem](https://1283af7d-441a-42c0-8e0d-49732d6d6de1.filesusr.com/ugd/1b1167_56d6af0682ca4c48b920627cea9312db.pdf)
+
+[Download project presentation](https://github.com/user-attachments/files/18215102/Presentation.CUDA.Raytracer.pptx)
+
+
 ## Future work
 - Improve bandwidth usage by performing parallel memory transfers.
 - Test different types of VRAM memory allocation.
 - Make the CUDA render kernels run in parallel.
 - Use CUDA shared memory to avoid cache misses.
 - Implement other raytracing features.
-- 
 
